@@ -1,0 +1,363 @@
+//! TOML config: defaults, per-activity and per-workspace tracking rules.
+
+use std::collections::BTreeMap;
+
+use anyhow::{Context as _, bail};
+use serde::Deserialize;
+
+/// Parsed and validated configuration.
+///
+/// Construct via [`Config::parse`] — the validation there is what `effective` relies on.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    #[serde(default)]
+    pub defaults: Defaults,
+    #[serde(default)]
+    pub activities: BTreeMap<String, ActivityRule>,
+    #[serde(default)]
+    pub workspaces: BTreeMap<String, WorkspaceRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Defaults {
+    pub switch_immediate: bool,
+    pub return_debounce_secs: u64,
+    pub untracked_grace_secs: u64,
+    pub entity_tag_key: String,
+    pub extra_tags: Vec<String>,
+    pub placeholder_activity: String,
+    pub placeholder_description: String,
+}
+
+impl Default for Defaults {
+    fn default() -> Self {
+        Self {
+            switch_immediate: true,
+            return_debounce_secs: 60,
+            untracked_grace_secs: 60,
+            entity_tag_key: "entity".into(),
+            extra_tags: Vec::new(),
+            placeholder_activity: "placeholder".into(),
+            placeholder_description: "auto-started by jiji-hamster-bridge — rename me".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRule {
+    /// Entity tag value; defaults to the activity name.
+    pub entity: Option<String>,
+    /// Hamster category used when creating placeholder facts for this entity.
+    pub category: String,
+    pub placeholder_activity: Option<String>,
+    pub placeholder_description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRule {
+    /// Track this workspace under the given entity (overrides the activity).
+    pub entity: Option<String>,
+    /// `false` = explicitly untracked even inside a tracked activity.
+    pub track: Option<bool>,
+    /// Placeholder category; falls back to the activity rule with the same entity.
+    pub category: Option<String>,
+    pub placeholder_activity: Option<String>,
+    pub placeholder_description: Option<String>,
+}
+
+impl Config {
+    pub fn parse(s: &str) -> anyhow::Result<Config> {
+        let cfg: Config = toml::from_str(s).context("invalid TOML")?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        for (name, w) in &self.workspaces {
+            if w.track == Some(true) {
+                bail!(
+                    "workspace rule '{name}': track = true is implied; omit the field \
+                     (track = false is the only meaningful value)"
+                );
+            }
+            match (&w.entity, w.track) {
+                (Some(_), Some(false)) => {
+                    bail!("workspace rule '{name}': entity and track=false are mutually exclusive")
+                }
+                (None, Some(false)) => {}
+                (Some(e), _) => {
+                    let resolvable =
+                        w.category.is_some() || self.activity_rule_for_entity(e).is_some();
+                    if !resolvable {
+                        bail!(
+                            "workspace rule '{name}': entity '{e}' has no category \
+                             (add category here or an [activities.*] rule with this entity)"
+                        );
+                    }
+                }
+                (None, _) => {
+                    bail!("workspace rule '{name}': needs either entity or track = false")
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve placeholder parameters for an entity, wherever it is defined:
+    /// activity rules first, then workspace rules carrying an inline category.
+    pub fn rule_for_entity(&self, entity: &str) -> Option<TrackedRule> {
+        if let Some(a) = self.activity_rule_for_entity(entity) {
+            return Some(TrackedRule {
+                entity: entity.to_string(),
+                category: a.category.clone(),
+                placeholder_activity: a
+                    .placeholder_activity
+                    .clone()
+                    .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
+                placeholder_description: a
+                    .placeholder_description
+                    .clone()
+                    .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
+            });
+        }
+        self.workspaces.values().find_map(|w| {
+            (w.entity.as_deref() == Some(entity) && w.category.is_some()).then(|| TrackedRule {
+                entity: entity.to_string(),
+                category: w.category.clone().unwrap(),
+                placeholder_activity: w
+                    .placeholder_activity
+                    .clone()
+                    .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
+                placeholder_description: w
+                    .placeholder_description
+                    .clone()
+                    .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
+            })
+        })
+    }
+
+    /// The first activity rule whose effective entity matches.
+    pub fn activity_rule_for_entity(&self, entity: &str) -> Option<&ActivityRule> {
+        self.activities
+            .iter()
+            .find(|(name, r)| r.entity.as_deref().unwrap_or(name) == entity)
+            .map(|(_, r)| r)
+    }
+
+    /// Workspace rule (by focused workspace name) ?? activity rule ?? untracked.
+    pub fn effective(&self, ctx: &crate::events::Context) -> Option<TrackedRule> {
+        if let Some(ws_name) = &ctx.workspace
+            && let Some(w) = self.workspaces.get(ws_name)
+        {
+            return match (&w.entity, w.track) {
+                (_, Some(false)) => None,
+                (Some(entity), _) => {
+                    let base = self.activity_rule_for_entity(entity);
+                    Some(TrackedRule {
+                        entity: entity.clone(),
+                        category: w
+                            .category
+                            .clone()
+                            .or_else(|| base.map(|r| r.category.clone()))
+                            .expect("validated: category resolvable"),
+                        placeholder_activity: w
+                            .placeholder_activity
+                            .clone()
+                            .or_else(|| base.and_then(|r| r.placeholder_activity.clone()))
+                            .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
+                        placeholder_description: w
+                            .placeholder_description
+                            .clone()
+                            .or_else(|| base.and_then(|r| r.placeholder_description.clone()))
+                            .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
+                    })
+                }
+                (None, _) => unreachable!("validated: entity xor track=false"),
+            };
+        }
+        let name = ctx.activity.as_ref()?;
+        let a = self.activities.get(name)?;
+        Some(TrackedRule {
+            entity: a.entity.clone().unwrap_or_else(|| name.clone()),
+            category: a.category.clone(),
+            placeholder_activity: a
+                .placeholder_activity
+                .clone()
+                .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
+            placeholder_description: a
+                .placeholder_description
+                .clone()
+                .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
+        })
+    }
+}
+
+/// A fully resolved "track this" decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedRule {
+    pub entity: String,
+    pub category: String,
+    pub placeholder_activity: String,
+    pub placeholder_description: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::Context;
+
+    const FULL: &str = r#"
+        [defaults]
+        switch_immediate = true
+        return_debounce_secs = 60
+        untracked_grace_secs = 60
+        entity_tag_key = "entity"
+        extra_tags = ["location: home"]
+        placeholder_activity = "placeholder"
+        placeholder_description = "auto-started by jiji-hamster-bridge — rename me"
+
+        [activities.work1]
+        entity = "work1"
+        category = "work1.example"
+
+        [activities.work2]
+        category = "work2.example"
+        placeholder_activity = "support"
+
+        [workspaces.invoicing]
+        entity = "work1"
+
+        [workspaces.scratch]
+        track = false
+    "#;
+
+    #[test]
+    fn parses_full_config() {
+        let c = Config::parse(FULL).unwrap();
+        assert_eq!(c.defaults.return_debounce_secs, 60);
+        assert_eq!(c.activities["work1"].category, "work1.example");
+        // entity field absent → effective entity is the activity name "work2"
+        assert_eq!(c.activities["work2"].entity.as_deref(), None);
+        assert_eq!(c.workspaces["invoicing"].entity.as_deref(), Some("work1"));
+        assert_eq!(c.workspaces["scratch"].track, Some(false));
+    }
+
+    #[test]
+    fn minimal_config_gets_defaults() {
+        let c = Config::parse("[activities.work1]\ncategory = \"y\"\n").unwrap();
+        assert!(c.defaults.switch_immediate);
+        assert_eq!(c.defaults.return_debounce_secs, 60);
+        assert_eq!(c.defaults.untracked_grace_secs, 60);
+        assert_eq!(c.defaults.entity_tag_key, "entity");
+        assert!(c.defaults.extra_tags.is_empty());
+        assert_eq!(c.defaults.placeholder_activity, "placeholder");
+        assert_eq!(
+            c.defaults.placeholder_description,
+            "auto-started by jiji-hamster-bridge — rename me"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_keys() {
+        assert!(Config::parse("[defaults]\nbogus = 1\n").is_err());
+    }
+
+    #[test]
+    fn rejects_workspace_rule_with_both_entity_and_track_false() {
+        let s = "[workspaces.x]\nentity = \"y\"\ntrack = false\n";
+        assert!(Config::parse(s).is_err());
+    }
+
+    #[test]
+    fn rejects_workspace_rule_with_neither_entity_nor_track_false() {
+        assert!(Config::parse("[workspaces.x]\n").is_err());
+    }
+
+    #[test]
+    fn rejects_workspace_entity_with_unresolvable_category() {
+        // entity "ghost" has no [activities.*] rule providing a category
+        let s = "[workspaces.x]\nentity = \"ghost\"\n";
+        assert!(Config::parse(s).is_err());
+        // but an inline category fixes it
+        let s2 = "[workspaces.x]\nentity = \"ghost\"\ncategory = \"g.com\"\n";
+        assert!(Config::parse(s2).is_ok());
+    }
+
+    #[test]
+    fn rejects_workspace_track_true() {
+        assert!(Config::parse("[workspaces.x]\ntrack = true\n").is_err());
+        assert!(
+            Config::parse("[workspaces.x]\nentity = \"y\"\ncategory = \"c\"\ntrack = true\n")
+                .is_err()
+        );
+    }
+
+    fn ctx(activity: Option<&str>, workspace: Option<&str>) -> Context {
+        Context {
+            activity: activity.map(Into::into),
+            workspace: workspace.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn activity_rule_applies_with_entity_defaulting_to_name() {
+        let c = Config::parse(FULL).unwrap();
+        let r = c.effective(&ctx(Some("work2"), None)).unwrap();
+        assert_eq!(r.entity, "work2");
+        assert_eq!(r.category, "work2.example");
+        assert_eq!(r.placeholder_activity, "support"); // per-rule override
+    }
+
+    #[test]
+    fn unconfigured_activity_is_untracked() {
+        let c = Config::parse(FULL).unwrap();
+        assert!(c.effective(&ctx(Some("games"), None)).is_none());
+        assert!(c.effective(&ctx(None, None)).is_none());
+    }
+
+    #[test]
+    fn workspace_rule_overrides_activity_even_untracked_one() {
+        let c = Config::parse(FULL).unwrap();
+        // tracked workspace inside an untracked activity
+        let r = c.effective(&ctx(Some("games"), Some("invoicing"))).unwrap();
+        assert_eq!(r.entity, "work1");
+        assert_eq!(r.category, "work1.example"); // borrowed from activities.work1
+    }
+
+    #[test]
+    fn track_false_workspace_wins_inside_tracked_activity() {
+        let c = Config::parse(FULL).unwrap();
+        assert!(c.effective(&ctx(Some("work1"), Some("scratch"))).is_none());
+    }
+
+    #[test]
+    fn unnamed_or_unconfigured_workspace_falls_through_to_activity() {
+        let c = Config::parse(FULL).unwrap();
+        let r = c.effective(&ctx(Some("work1"), Some("random-ws"))).unwrap();
+        assert_eq!(r.entity, "work1");
+        let r2 = c.effective(&ctx(Some("work1"), None)).unwrap();
+        assert_eq!(r2.entity, "work1");
+    }
+
+    #[test]
+    fn workspace_rule_with_inline_category_needs_no_activity_rule() {
+        let c = Config::parse("[workspaces.lab]\nentity = \"ghost\"\ncategory = \"ghost.org\"\n")
+            .unwrap();
+        let r = c.effective(&ctx(None, Some("lab"))).unwrap();
+        assert_eq!(r.entity, "ghost");
+        assert_eq!(r.category, "ghost.org");
+        assert_eq!(r.placeholder_activity, "placeholder"); // from defaults
+    }
+
+    #[test]
+    fn rule_for_entity_resolves_workspace_only_entities() {
+        let c =
+            Config::parse("[workspaces.x]\nentity = \"ghost\"\ncategory = \"g.com\"\n").unwrap();
+        assert_eq!(c.rule_for_entity("ghost").unwrap().category, "g.com");
+        assert!(c.rule_for_entity("nope").is_none());
+    }
+}
