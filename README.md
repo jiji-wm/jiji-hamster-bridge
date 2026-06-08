@@ -23,12 +23,24 @@ category = "work1.example"       # hamster category for placeholder facts
 [activities.work2]
 category = "work2.example"
 
+[activities."/acme/"]           # regex key (slash-delimited) — matches any
+entity = "acme_other"           # activity name containing "acme" that no
+category = "acme-corp.com"      # exact rule already matched. entity REQUIRED.
+
 [workspaces.invoicing]           # named workspace — overrides its activity
 entity = "work1"
 
 [workspaces.scratch]
 track = false                    # untracked even inside a tracked activity
 ```
+
+A mapping key wrapped in `/…/` is a regex (Rust `regex` syntax, matched
+unanchored with `is_match`). Exact keys are always tried first; regex keys are a
+fallback, evaluated in sorted-key order with the first match winning. Use `^`/`$`
+to anchor (`/^acme-/`). Regex **activity** rules must set `entity` explicitly
+(there is no single name to default to); regex **workspace** rules follow the
+same rules as exact ones (`entity`, or `track = false`). An invalid or empty
+regex is rejected on load like any other config error.
 
 ## Install
 
