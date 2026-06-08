@@ -141,7 +141,7 @@ impl Config {
                 .with_context(|| format!("activity rule '{key}': invalid regex"))?;
             self.activity_patterns.push((re, key.clone()));
         }
-        for (key, _) in &self.workspaces {
+        for key in self.workspaces.keys() {
             let Some(src) = regex_source(key) else {
                 continue;
             };
