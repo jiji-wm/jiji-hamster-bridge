@@ -5,6 +5,14 @@ use std::collections::BTreeMap;
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
 
+/// If `key` is a regex-form mapping key `/source/`, return the inner `source`
+/// (which may be empty). Ordinary literal keys return `None`. `/` is ASCII, so
+/// byte checks and the slice are always on char boundaries.
+fn regex_source(key: &str) -> Option<&str> {
+    let b = key.as_bytes();
+    (b.len() >= 2 && b[0] == b'/' && b[b.len() - 1] == b'/').then(|| &key[1..key.len() - 1])
+}
+
 /// Parsed and validated configuration.
 ///
 /// Construct via [`Config::parse`] — the validation there is what `effective` relies on.
@@ -234,6 +242,17 @@ mod tests {
         [workspaces.scratch]
         track = false
     "#;
+
+    #[test]
+    fn regex_source_detects_slash_delimited_keys() {
+        assert_eq!(regex_source("/acme/"), Some("acme"));
+        assert_eq!(regex_source("/^acme-/"), Some("^acme-"));
+        assert_eq!(regex_source("//"), Some("")); // empty source — caught later
+        assert_eq!(regex_source("acme"), None); // ordinary literal
+        assert_eq!(regex_source("/"), None); // too short
+        assert_eq!(regex_source("/acme"), None); // not closed
+        assert_eq!(regex_source(""), None);
+    }
 
     #[test]
     fn parses_full_config() {
