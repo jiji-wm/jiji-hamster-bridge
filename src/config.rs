@@ -245,13 +245,26 @@ impl Config {
 
     /// Workspace rule (by focused workspace name) ?? activity rule ?? untracked.
     pub fn effective(&self, ctx: &crate::events::Context) -> Option<TrackedRule> {
-        if let Some(ws_name) = &ctx.workspace
-            && let Some(w) = self.workspaces.get(ws_name)
-        {
-            return self.tracked_from_workspace(w);
+        if let Some(ws_name) = &ctx.workspace {
+            if let Some(w) = self.workspaces.get(ws_name) {
+                return self.tracked_from_workspace(w);
+            }
+            if let Some(key) = self
+                .workspace_patterns
+                .iter()
+                .find(|(re, _)| re.is_match(ws_name))
+                .map(|(_, k)| k)
+            {
+                return self.tracked_from_workspace(&self.workspaces[key]);
+            }
         }
         let name = ctx.activity.as_ref()?;
-        let a = self.activities.get(name)?;
+        let a = self.activities.get(name).or_else(|| {
+            self.activity_patterns
+                .iter()
+                .find(|(re, _)| re.is_match(name))
+                .map(|(_, k)| &self.activities[k])
+        })?;
         Some(self.tracked_from_activity(name, a))
     }
 }
@@ -448,6 +461,57 @@ mod tests {
         assert_eq!(r.entity, "ghost");
         assert_eq!(r.category, "ghost.org");
         assert_eq!(r.placeholder_activity, "placeholder"); // from defaults
+    }
+
+    #[test]
+    fn regex_activity_matches_non_exact_name() {
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.effective(&ctx(Some("acme-invoices"), None)).unwrap();
+        assert_eq!(r.entity, "acme_other");
+        assert_eq!(r.category, "acme-corp.com");
+    }
+
+    #[test]
+    fn exact_activity_beats_regex() {
+        let s = "[activities.acme]\ncategory = \"acme-corp.com\"\n\
+                 [activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let c = Config::parse(s).unwrap();
+        // exact name hits the literal rule, not the (also-matching) regex
+        let r = c.effective(&ctx(Some("acme"), None)).unwrap();
+        assert_eq!(r.entity, "acme");
+    }
+
+    #[test]
+    fn first_regex_in_sorted_order_wins() {
+        // both "/^y/" and "/acme/" match "acme-x"; sorted-key order: "/^y/" < "/acme/"
+        let s = "[activities.\"/^y/\"]\nentity = \"first\"\ncategory = \"c\"\n\
+                 [activities.\"/acme/\"]\nentity = \"second\"\ncategory = \"c\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.effective(&ctx(Some("acme-x"), None)).unwrap();
+        assert_eq!(r.entity, "first");
+    }
+
+    #[test]
+    fn regex_workspace_track_false_untracks() {
+        let s = "[activities.acme]\ncategory = \"acme-corp.com\"\n\
+                 [workspaces.\"/^scratch-/\"]\ntrack = false\n";
+        let c = Config::parse(s).unwrap();
+        assert!(
+            c.effective(&ctx(Some("acme"), Some("scratch-1")))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn regex_workspace_overrides_activity() {
+        let s = "[activities.work2]\ncategory = \"general\"\n\
+                 [workspaces.\"/^bill/\"]\nentity = \"acme\"\ncategory = \"acme-corp.com\"\n";
+        let c = Config::parse(s).unwrap();
+        // untracked activity, but the workspace regex pins it to acme
+        let r = c.effective(&ctx(Some("games"), Some("billing"))).unwrap();
+        assert_eq!(r.entity, "acme");
+        assert_eq!(r.category, "acme-corp.com");
     }
 
     #[test]
