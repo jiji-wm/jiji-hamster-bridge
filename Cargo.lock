@@ -493,6 +493,7 @@ dependencies = [
  "futures-util",
  "log",
  "notify",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
