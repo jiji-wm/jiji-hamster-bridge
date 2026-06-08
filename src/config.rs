@@ -196,41 +196,41 @@ impl Config {
             .map(|(_, r)| r)
     }
 
-    /// Workspace rule (by focused workspace name) ?? activity rule ?? untracked.
-    pub fn effective(&self, ctx: &crate::events::Context) -> Option<TrackedRule> {
-        if let Some(ws_name) = &ctx.workspace
-            && let Some(w) = self.workspaces.get(ws_name)
-        {
-            return match (&w.entity, w.track) {
-                (_, Some(false)) => None,
-                (Some(entity), _) => {
-                    let base = self.activity_rule_for_entity(entity);
-                    Some(TrackedRule {
-                        entity: entity.clone(),
-                        category: w
-                            .category
-                            .clone()
-                            .or_else(|| base.map(|r| r.category.clone()))
-                            .expect("validated: category resolvable"),
-                        placeholder_activity: w
-                            .placeholder_activity
-                            .clone()
-                            .or_else(|| base.and_then(|r| r.placeholder_activity.clone()))
-                            .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
-                        placeholder_description: w
-                            .placeholder_description
-                            .clone()
-                            .or_else(|| base.and_then(|r| r.placeholder_description.clone()))
-                            .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
-                    })
-                }
-                (None, _) => unreachable!("validated: entity xor track=false"),
-            };
+    /// Build the tracked rule for a matched workspace rule (`None` = untracked).
+    fn tracked_from_workspace(&self, w: &WorkspaceRule) -> Option<TrackedRule> {
+        match (&w.entity, w.track) {
+            (_, Some(false)) => None,
+            (Some(entity), _) => {
+                let base = self.activity_rule_for_entity(entity);
+                Some(TrackedRule {
+                    entity: entity.clone(),
+                    category: w
+                        .category
+                        .clone()
+                        .or_else(|| base.map(|r| r.category.clone()))
+                        .expect("validated: category resolvable"),
+                    placeholder_activity: w
+                        .placeholder_activity
+                        .clone()
+                        .or_else(|| base.and_then(|r| r.placeholder_activity.clone()))
+                        .unwrap_or_else(|| self.defaults.placeholder_activity.clone()),
+                    placeholder_description: w
+                        .placeholder_description
+                        .clone()
+                        .or_else(|| base.and_then(|r| r.placeholder_description.clone()))
+                        .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
+                })
+            }
+            (None, _) => unreachable!("validated: entity xor track=false"),
         }
-        let name = ctx.activity.as_ref()?;
-        let a = self.activities.get(name)?;
-        Some(TrackedRule {
-            entity: a.entity.clone().unwrap_or_else(|| name.clone()),
+    }
+
+    /// Build the tracked rule for a matched activity rule. For regex rules the
+    /// entity is always explicit (validated); for exact rules it defaults to the
+    /// matched activity name, as before.
+    fn tracked_from_activity(&self, name: &str, a: &ActivityRule) -> TrackedRule {
+        TrackedRule {
+            entity: a.entity.clone().unwrap_or_else(|| name.to_string()),
             category: a.category.clone(),
             placeholder_activity: a
                 .placeholder_activity
@@ -240,7 +240,19 @@ impl Config {
                 .placeholder_description
                 .clone()
                 .unwrap_or_else(|| self.defaults.placeholder_description.clone()),
-        })
+        }
+    }
+
+    /// Workspace rule (by focused workspace name) ?? activity rule ?? untracked.
+    pub fn effective(&self, ctx: &crate::events::Context) -> Option<TrackedRule> {
+        if let Some(ws_name) = &ctx.workspace
+            && let Some(w) = self.workspaces.get(ws_name)
+        {
+            return self.tracked_from_workspace(w);
+        }
+        let name = ctx.activity.as_ref()?;
+        let a = self.activities.get(name)?;
+        Some(self.tracked_from_activity(name, a))
     }
 }
 
