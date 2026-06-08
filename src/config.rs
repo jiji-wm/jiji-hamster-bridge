@@ -243,19 +243,22 @@ impl Config {
         }
     }
 
-    /// Workspace rule (by focused workspace name) ?? activity rule ?? untracked.
+    /// Resolve the effective tracking rule in four-tier precedence: workspace
+    /// exact, then workspace regex, then activity exact, then activity regex.
+    /// Exact beats regex within each domain; the first regex in sorted-key order
+    /// wins. `None` = untracked.
     pub fn effective(&self, ctx: &crate::events::Context) -> Option<TrackedRule> {
         if let Some(ws_name) = &ctx.workspace {
             if let Some(w) = self.workspaces.get(ws_name) {
                 return self.tracked_from_workspace(w);
             }
-            if let Some(key) = self
+            if let Some(w) = self
                 .workspace_patterns
                 .iter()
                 .find(|(re, _)| re.is_match(ws_name))
-                .map(|(_, k)| k)
+                .map(|(_, k)| &self.workspaces[k])
             {
-                return self.tracked_from_workspace(&self.workspaces[key]);
+                return self.tracked_from_workspace(w);
             }
         }
         let name = ctx.activity.as_ref()?;
@@ -528,5 +531,41 @@ mod tests {
             Config::parse("[workspaces.x]\nentity = \"ghost\"\ncategory = \"g.com\"\n").unwrap();
         assert_eq!(c.rule_for_entity("ghost").unwrap().category, "g.com");
         assert!(c.rule_for_entity("nope").is_none());
+    }
+
+    #[test]
+    fn exact_workspace_beats_regex_workspace() {
+        // both [workspaces.billing] and the regex "/^bill/" match "billing";
+        // the exact rule (entity "exact_e") must win over the regex (entity "regex_e")
+        let s = "[workspaces.billing]\nentity = \"exact_e\"\ncategory = \"exact.com\"\n\
+                 [workspaces.\"/^bill/\"]\nentity = \"regex_e\"\ncategory = \"regex.com\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.effective(&ctx(None, Some("billing"))).unwrap();
+        assert_eq!(r.entity, "exact_e");
+        assert_eq!(r.category, "exact.com");
+    }
+
+    #[test]
+    fn regex_workspace_derives_category_from_activity_rule() {
+        // regex workspace has entity but no inline category; the category is
+        // borrowed from the [activities.acme] rule sharing that entity
+        let s = "[activities.acme]\ncategory = \"acme-corp.com\"\n\
+                 [workspaces.\"/^bill/\"]\nentity = \"acme\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.effective(&ctx(None, Some("billing"))).unwrap();
+        assert_eq!(r.entity, "acme");
+        assert_eq!(r.category, "acme-corp.com");
+    }
+
+    #[test]
+    fn non_matching_regex_workspace_falls_through_to_activity() {
+        // "/^foo/" does not match "other"; resolution must fall through to the
+        // tracked activity "bar" rather than returning None
+        let s = "[activities.bar]\nentity = \"bar\"\ncategory = \"bar.com\"\n\
+                 [workspaces.\"/^foo/\"]\nentity = \"bar\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.effective(&ctx(Some("bar"), Some("other"))).unwrap();
+        assert_eq!(r.entity, "bar");
+        assert_eq!(r.category, "bar.com");
     }
 }
