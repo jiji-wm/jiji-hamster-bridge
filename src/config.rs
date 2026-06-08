@@ -25,6 +25,13 @@ pub struct Config {
     pub activities: BTreeMap<String, ActivityRule>,
     #[serde(default)]
     pub workspaces: BTreeMap<String, WorkspaceRule>,
+    /// Compiled activity regex rules, paired with their map key, in sorted-key
+    /// order (BTreeMap iteration order). Populated by `build_patterns`.
+    #[serde(skip)]
+    activity_patterns: Vec<(regex::Regex, String)>,
+    /// Compiled workspace regex rules, paired with their map key.
+    #[serde(skip)]
+    workspace_patterns: Vec<(regex::Regex, String)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,8 +86,9 @@ pub struct WorkspaceRule {
 
 impl Config {
     pub fn parse(s: &str) -> anyhow::Result<Config> {
-        let cfg: Config = toml::from_str(s).context("invalid TOML")?;
+        let mut cfg: Config = toml::from_str(s).context("invalid TOML")?;
         cfg.validate()?;
+        cfg.build_patterns()?;
         Ok(cfg)
     }
 
@@ -111,6 +119,38 @@ impl Config {
                     bail!("workspace rule '{name}': needs either entity or track = false")
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Compile every regex-form key into the pattern caches. Runs after
+    /// `validate`, so exact-rule invariants already hold. Errors here propagate
+    /// out of `parse` and are surfaced by the hot-reload path as a notification.
+    fn build_patterns(&mut self) -> anyhow::Result<()> {
+        for (key, rule) in &self.activities {
+            let Some(src) = regex_source(key) else {
+                continue;
+            };
+            if src.is_empty() {
+                bail!("activity rule '{key}': empty regex matches everything");
+            }
+            if rule.entity.is_none() {
+                bail!("activity rule '{key}': regex rules require an explicit entity");
+            }
+            let re = regex::Regex::new(src)
+                .with_context(|| format!("activity rule '{key}': invalid regex"))?;
+            self.activity_patterns.push((re, key.clone()));
+        }
+        for (key, _) in &self.workspaces {
+            let Some(src) = regex_source(key) else {
+                continue;
+            };
+            if src.is_empty() {
+                bail!("workspace rule '{key}': empty regex matches everything");
+            }
+            let re = regex::Regex::new(src)
+                .with_context(|| format!("workspace rule '{key}': invalid regex"))?;
+            self.workspace_patterns.push((re, key.clone()));
         }
         Ok(())
     }
@@ -252,6 +292,32 @@ mod tests {
         assert_eq!(regex_source("/"), None); // too short
         assert_eq!(regex_source("/acme"), None); // not closed
         assert_eq!(regex_source(""), None);
+    }
+
+    #[test]
+    fn valid_regex_activity_config_parses() {
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        assert!(Config::parse(s).is_ok());
+    }
+
+    #[test]
+    fn regex_activity_requires_entity() {
+        // no entity → the matched name has no sensible default, reject at parse
+        let s = "[activities.\"/acme/\"]\ncategory = \"acme-corp.com\"\n";
+        assert!(Config::parse(s).is_err());
+    }
+
+    #[test]
+    fn empty_regex_rejected() {
+        let s = "[activities.\"//\"]\nentity = \"x\"\ncategory = \"c\"\n";
+        assert!(Config::parse(s).is_err());
+    }
+
+    #[test]
+    fn invalid_regex_rejected() {
+        // unbalanced paren — does not compile
+        let s = "[activities.\"/(/\"]\nentity = \"x\"\ncategory = \"c\"\n";
+        assert!(Config::parse(s).is_err());
     }
 
     #[test]
