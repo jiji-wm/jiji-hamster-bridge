@@ -515,6 +515,14 @@ mod tests {
     }
 
     #[test]
+    fn rule_for_entity_resolves_regex_rule_entity() {
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let c = Config::parse(s).unwrap();
+        let r = c.rule_for_entity("acme_other").unwrap();
+        assert_eq!(r.category, "acme-corp.com");
+    }
+
+    #[test]
     fn rule_for_entity_resolves_workspace_only_entities() {
         let c =
             Config::parse("[workspaces.x]\nentity = \"ghost\"\ncategory = \"g.com\"\n").unwrap();
