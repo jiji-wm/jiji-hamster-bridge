@@ -57,4 +57,4 @@ Do not re-derive these from the D-Bus introspection — the API has edge cases:
 
 - No design-doc/phase references in code or commit messages (hooks enforce this).
 - Commit trailers per workspace CLAUDE.md: `Review-Needed: committed by Claude Code` + `AI-Assisted: <mode> (<model-id>)`.
-- Commits in this repo are self-contained — workspace `CLAUDE.md` Resume cues are updated separately in the workspace repo.
+- Commits in this repo are self-contained.
