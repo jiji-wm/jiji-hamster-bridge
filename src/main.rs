@@ -65,10 +65,17 @@ async fn event_stream_task(tx: Sender<LoopInput>) {
 
 /// Watch the config file + SIGHUP; send validated configs, notify on errors.
 async fn config_reload_task(tx: Sender<LoopInput>, path: PathBuf) -> anyhow::Result<()> {
+    use jiji_hamster_bridge::config_watch::is_relevant_event;
     use notify::Watcher as _;
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::channel::<()>(4);
+    // Filter at the source: a config read (which the reload itself performs)
+    // surfaces as Access/atime events; forwarding those would make the watcher
+    // re-trigger on its own reads, reloading several times a second forever.
+    let watched_file = path.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
+        if let Ok(event) = res
+            && is_relevant_event(&event, &watched_file)
+        {
             let _ = raw_tx.try_send(());
         }
     })
@@ -83,15 +90,32 @@ async fn config_reload_task(tx: Sender<LoopInput>, path: PathBuf) -> anyhow::Res
     }
     let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .context("install SIGHUP handler")?;
+    // Baseline for the content guard: only reload when bytes actually change.
+    // Seeded from disk so the first spurious event after startup is a no-op.
+    let mut last_raw = std::fs::read_to_string(&path).ok();
     loop {
-        tokio::select! {
-            r = raw_rx.recv() => if r.is_none() { return Ok(()) },
-            _ = hup.recv() => {}
-        }
+        let forced = tokio::select! {
+            r = raw_rx.recv() => { if r.is_none() { return Ok(()) } false }
+            _ = hup.recv() => true,
+        };
         // debounce bursts of fs events
         tokio::time::sleep(Duration::from_millis(200)).await;
         while raw_rx.try_recv().is_ok() {}
-        match load_config(&path) {
+        let new_raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                // Transient during an atomic replace (old file gone, new not
+                // yet moved in); the moved-in file fires its own event.
+                log::debug!("config read skipped: {e}");
+                continue;
+            }
+        };
+        // SIGHUP always reloads; fs events only when the content changed.
+        if !forced && last_raw.as_deref() == Some(new_raw.as_str()) {
+            continue;
+        }
+        last_raw = Some(new_raw.clone());
+        match Config::parse(&new_raw) {
             Ok(cfg) => {
                 log::info!("config reloaded");
                 if tx.send(LoopInput::ConfigReloaded(cfg)).await.is_err() {

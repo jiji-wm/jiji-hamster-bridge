@@ -1,4 +1,5 @@
 pub mod config;
+pub mod config_watch;
 pub mod engine;
 pub mod events;
 pub mod hamster;
