@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Pause/resume hamster time tracking from jiji activity and workspace focus"
 authors = ["Petr Gajdůšek"]
 license = "GPL-3.0-or-later"
+repository = "https://github.com/jiji-wm/jiji-hamster-bridge"
 edition = "2024"
 publish = false
 
