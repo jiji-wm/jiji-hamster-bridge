@@ -108,8 +108,10 @@ async fn execute<C: HamsterClient>(cmd: &Command, client: &C, cfg: &Config) -> a
             let rule = cfg
                 .rule_for_entity(entity)
                 .ok_or_else(|| anyhow::anyhow!("no rule resolves entity '{entity}'"))?;
-            let todays = client.todays_facts().await?;
-            let plan = plan_resume(&todays, &rule, &cfg.defaults, &now_local_string());
+            let recent = client
+                .recent_facts(cfg.defaults.resume_lookback_days)
+                .await?;
+            let plan = plan_resume(&recent, &rule, &cfg.defaults, &now_local_string());
             if matches!(cmd, Command::Switch { .. }) {
                 client.stop_tracking().await?;
             }
@@ -143,7 +145,7 @@ mod tests {
     use crate::config::Config;
     use crate::hamster::{Fact, HamsterClient, NewFact};
 
-    /// Recording fake: scripted todays_facts, records every call.
+    /// Recording fake: one scripted fact list serves both fact queries; records every call.
     #[derive(Clone, Default)]
     struct FakeHamster {
         facts: Arc<Mutex<Vec<Fact>>>,
@@ -153,6 +155,10 @@ mod tests {
 
     impl HamsterClient for FakeHamster {
         async fn todays_facts(&self) -> anyhow::Result<Vec<Fact>> {
+            Ok(self.facts.lock().unwrap().clone())
+        }
+        async fn recent_facts(&self, days: u64) -> anyhow::Result<Vec<Fact>> {
+            self.calls.lock().unwrap().push(format!("recent:{days}"));
             Ok(self.facts.lock().unwrap().clone())
         }
         async fn add_fact(&self, fact: &NewFact) -> anyhow::Result<()> {
@@ -253,6 +259,45 @@ mod tests {
             .position(|c| c.starts_with("add:placeholder@work2.example"))
             .unwrap();
         assert!(stop_idx < add_idx);
+
+        drop(tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resume_clones_a_prior_fact_within_the_lookback_window() {
+        // a completed work2 fact from earlier in the window (not today) exists;
+        // entering work2 must clone it via the recent-facts query rather than
+        // minting a placeholder
+        let fake = FakeHamster::default();
+        *fake.facts.lock().unwrap() = vec![
+            serde_json::from_value(serde_json::json!({
+                "activity": "devel", "category": "work2.example",
+                "description": "ongoing work", "tags": ["entity: work2"], "id": 7,
+                "range": {"start": "2026-06-02 09:00", "end": "2026-06-02 17:00"},
+            }))
+            .unwrap(),
+        ];
+        let cfg = Config::parse(CONFIG).unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let handle = tokio::spawn(run_loop(rx, fake.clone(), cfg));
+
+        for l in activity_switch_lines() {
+            tx.send(LoopInput::EventLine(l)).await.unwrap();
+        }
+        tx.send(LoopInput::EventLine(
+            r#"{"ActivitySwitched":{"id":8,"previous_id":3}}"#.into(),
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let calls = fake.calls.lock().unwrap().clone();
+        // the prior fact is cloned, not a placeholder
+        assert!(calls.iter().any(|c| c == "add:devel@work2.example"));
+        assert!(!calls.iter().any(|c| c.starts_with("add:placeholder@work2")));
+        // the resume path queried the configured (default 5-day) window
+        assert!(calls.iter().any(|c| c == "recent:5"));
 
         drop(tx);
         handle.await.unwrap();

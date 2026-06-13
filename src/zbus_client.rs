@@ -13,6 +13,8 @@ use crate::hamster::{Fact, HamsterClient, NewFact};
 pub trait Hamster {
     #[zbus(name = "GetTodaysFactsJSON")]
     fn get_todays_facts_json(&self) -> zbus::Result<Vec<String>>;
+    #[zbus(name = "GetFactsJSON")]
+    fn get_facts_json(&self, dbus_range: &str, search_terms: &str) -> zbus::Result<Vec<String>>;
     #[zbus(name = "AddFactJSON")]
     fn add_fact_json(&self, fact: &str) -> zbus::Result<i32>;
     fn stop_tracking(&self, end_time: i32) -> zbus::Result<()>;
@@ -45,6 +47,18 @@ impl HamsterClient for ZbusHamster {
             .get_todays_facts_json()
             .await
             .context("GetTodaysFactsJSON")?;
+        raw.iter()
+            .map(|s| serde_json::from_str(s).context("parse fact"))
+            .collect()
+    }
+
+    async fn recent_facts(&self, days: u64) -> anyhow::Result<Vec<Fact>> {
+        let range = crate::resume::day_range(chrono::Local::now().date_naive(), days);
+        let raw = self
+            .proxy
+            .get_facts_json(&range, "")
+            .await
+            .context("GetFactsJSON")?;
         raw.iter()
             .map(|s| serde_json::from_str(s).context("parse fact"))
             .collect()

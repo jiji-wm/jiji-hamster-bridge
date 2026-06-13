@@ -44,6 +44,9 @@ pub struct Defaults {
     pub extra_tags: Vec<String>,
     pub placeholder_activity: String,
     pub placeholder_description: String,
+    /// How many days back to look for a prior fact of the same entity to clone
+    /// on resume before falling back to a placeholder. `0` = today only.
+    pub resume_lookback_days: u64,
 }
 
 impl Default for Defaults {
@@ -56,6 +59,7 @@ impl Default for Defaults {
             extra_tags: Vec::new(),
             placeholder_activity: "placeholder".into(),
             placeholder_description: "auto-started by jiji-hamster-bridge — rename me".into(),
+            resume_lookback_days: 5,
         }
     }
 }
@@ -373,6 +377,7 @@ mod tests {
             c.defaults.placeholder_description,
             "auto-started by jiji-hamster-bridge — rename me"
         );
+        assert_eq!(c.defaults.resume_lookback_days, 5);
     }
 
     #[test]

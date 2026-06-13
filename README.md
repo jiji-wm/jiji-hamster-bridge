@@ -1,6 +1,6 @@
 # jiji-hamster-bridge
 
-Bridges [jiji](https://github.com/jiji-wm/jiji) (a Wayland compositor) activity and workspace focus events to [GNOME Hamster](https://projecthamster.org/) time tracking over D-Bus. As you switch activities or named workspaces, the bridge pauses, resumes, and switches the running Hamster fact so it always matches the active desktop context. Hysteresis debouncing prevents timesheet fragmentation from transient window switches — starts are immediate, but stops and cross-context switches only commit after configurable grace periods. On resume, the bridge matches existing facts by `entity:` tag (today only) and creates tagged placeholder facts when nothing matches, so the Hamster timeline stays coherent without manual intervention.
+Bridges [jiji](https://github.com/jiji-wm/jiji) (a Wayland compositor) activity and workspace focus events to [GNOME Hamster](https://projecthamster.org/) time tracking over D-Bus. As you switch activities or named workspaces, the bridge pauses, resumes, and switches the running Hamster fact so it always matches the active desktop context. Hysteresis debouncing prevents timesheet fragmentation from transient window switches — starts are immediate, but stops and cross-context switches only commit after configurable grace periods. On resume, the bridge matches existing facts by `entity:` tag (looking back over a configurable window, 5 days by default) and creates tagged placeholder facts only when nothing matches, so the Hamster timeline stays coherent without manual intervention.
 
 ## Configuration
 
@@ -15,6 +15,7 @@ entity_tag_key = "entity"        # tag key: "entity: work1"
 extra_tags = ["location: home"]  # added to new placeholder facts
 placeholder_activity = "placeholder"
 placeholder_description = "auto-started by jiji-hamster-bridge — rename me"
+resume_lookback_days = 5         # days back to clone a prior fact before a placeholder
 
 [activities.work1]
 entity = "work1"                 # default: the activity name itself

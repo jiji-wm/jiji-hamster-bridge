@@ -67,6 +67,9 @@ pub fn running_fact(facts: &[Fact]) -> Option<&Fact> {
 /// implementation; tests use a recording fake.
 pub trait HamsterClient {
     fn todays_facts(&self) -> impl Future<Output = anyhow::Result<Vec<Fact>>> + Send;
+    /// Facts from the last `days` days (today and the `days` preceding days),
+    /// oldest-first. Used by the resume planner to clone a recent prior fact.
+    fn recent_facts(&self, days: u64) -> impl Future<Output = anyhow::Result<Vec<Fact>>> + Send;
     fn add_fact(&self, fact: &NewFact) -> impl Future<Output = anyhow::Result<()>> + Send;
     fn stop_tracking(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
     fn notify(&self, message: &str) -> impl Future<Output = ()> + Send;

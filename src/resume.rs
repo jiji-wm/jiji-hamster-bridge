@@ -1,4 +1,4 @@
-//! Resume planning: clone today's newest entity-tagged fact, or start a placeholder.
+//! Resume planning: clone the newest recent entity-tagged fact, or start a placeholder.
 
 use crate::config::{Defaults, TrackedRule};
 use crate::hamster::{Fact, NewFact, NewRange, entity_of};
@@ -10,16 +10,18 @@ pub struct ResumePlan {
 
 /// `now_local` is a hamster-format local timestamp ("YYYY-MM-DD HH:MM").
 ///
-/// Pure planning only: the returned fact is open-ended (`end: None`), so the
-/// caller must stop any currently running fact before submitting it —
-/// including when the matched template fact is itself still running.
+/// `facts` is the recent fact window (see [`day_range`]) the planner searches,
+/// newest-first, for a prior fact of the same entity to clone. Pure planning
+/// only: the returned fact is open-ended (`end: None`), so the caller must stop
+/// any currently running fact before submitting it — including when the matched
+/// template fact is itself still running.
 pub fn plan_resume(
-    todays: &[Fact],
+    facts: &[Fact],
     rule: &TrackedRule,
     defaults: &Defaults,
     now_local: &str,
 ) -> ResumePlan {
-    let found = todays
+    let found = facts
         .iter()
         .rev()
         .find(|f| entity_of(f, &defaults.entity_tag_key).as_deref() == Some(&rule.entity));
@@ -63,6 +65,14 @@ pub fn plan_resume(
 /// Hamster-format local "now" ("YYYY-MM-DD HH:MM").
 pub fn now_local_string() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+}
+
+/// Hamster `GetFactsJSON` range string spanning the last `days` days: from
+/// `days` days before `today` through `today`, inclusive. `days == 0` yields a
+/// single-day (today-only) range. Pure: the clock is supplied via `today`.
+pub fn day_range(today: chrono::NaiveDate, days: u64) -> String {
+    let start = today - chrono::Duration::days(days as i64);
+    format!("{} {}", start.format("%Y-%m-%d"), today.format("%Y-%m-%d"))
 }
 
 #[cfg(test)]
@@ -153,5 +163,25 @@ mod tests {
         let facts = vec![fact("task", &["entity: work2"], Some("2026-06-06 10:00"))];
         let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
         assert_eq!(plan.fact.category, "work2.example");
+    }
+
+    #[test]
+    fn resumes_a_fact_from_earlier_in_the_window() {
+        // a matching fact several days old (not today) is still cloned, not
+        // replaced by a placeholder
+        let facts = vec![fact("devel", &["entity: work2"], Some("2026-06-02 11:00"))];
+        let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
+        assert_eq!(plan.fact.activity, "devel");
+        assert!(plan.notification.is_none());
+    }
+
+    #[test]
+    fn day_range_spans_lookback_window_inclusive() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 13).unwrap();
+        assert_eq!(day_range(today, 5), "2026-06-08 2026-06-13");
+        // 0 = today only
+        assert_eq!(day_range(today, 0), "2026-06-13 2026-06-13");
+        // crosses a month boundary
+        assert_eq!(day_range(today, 20), "2026-05-24 2026-06-13");
     }
 }
