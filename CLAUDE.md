@@ -11,7 +11,7 @@ Repo discipline for Claude Code sessions in this repository.
 ## Build / test / lint
 
 ```sh
-cargo test                          # 54 unit/integration tests
+cargo test                          # 97 unit/integration tests
 cargo test -- --ignored             # 1 live smoke test (needs session bus + hamster-service, read-only)
 cargo +nightly fmt --all
 cargo clippy --all-targets

@@ -47,6 +47,10 @@ pub struct Defaults {
     /// How many days back to look for a prior fact of the same entity to clone
     /// on resume before falling back to a placeholder. `0` = today only.
     pub resume_lookback_days: u64,
+    /// When a resume clones a prior fact's description, prepend the continued
+    /// marker (`..`) to each carried-over block's first line — but only when the
+    /// cloned fact is from the same calendar day. A new day always starts fresh.
+    pub mark_continuations: bool,
 }
 
 impl Default for Defaults {
@@ -60,6 +64,7 @@ impl Default for Defaults {
             placeholder_activity: "placeholder".into(),
             placeholder_description: "auto-started by jiji-hamster-bridge — rename me".into(),
             resume_lookback_days: 5,
+            mark_continuations: true,
         }
     }
 }
@@ -378,6 +383,16 @@ mod tests {
             "auto-started by jiji-hamster-bridge — rename me"
         );
         assert_eq!(c.defaults.resume_lookback_days, 5);
+        assert!(c.defaults.mark_continuations);
+    }
+
+    #[test]
+    fn mark_continuations_can_be_disabled() {
+        let c = Config::parse(
+            "[defaults]\nmark_continuations = false\n[activities.work1]\ncategory = \"y\"\n",
+        )
+        .unwrap();
+        assert!(!c.defaults.mark_continuations);
     }
 
     #[test]

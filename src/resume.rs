@@ -30,7 +30,7 @@ pub fn plan_resume(
             fact: NewFact {
                 activity: f.activity.clone(),
                 category: f.category.clone(),
-                description: f.description.clone(),
+                description: carried_description(f, defaults, now_local),
                 tags: f.tags.clone(),
                 range: NewRange {
                     start: now_local.to_string(),
@@ -60,6 +60,29 @@ pub fn plan_resume(
             }
         }
     }
+}
+
+/// The description to carry forward when cloning `f`. When continuation marking
+/// is enabled and `f` started on the same calendar day as `now_local`, each
+/// carried-over block's first line is stamped with the continued marker (`..`);
+/// otherwise the description is cloned verbatim. A cross-day clone (or a fact
+/// with no recorded start) is a fresh effort today and is never marked.
+fn carried_description(f: &Fact, defaults: &Defaults, now_local: &str) -> String {
+    let same_day = f
+        .range
+        .start
+        .as_deref()
+        .is_some_and(|start| date_part(start) == date_part(now_local));
+    if defaults.mark_continuations && same_day {
+        crate::markers::mark_continuation(&f.description)
+    } else {
+        f.description.clone()
+    }
+}
+
+/// The "YYYY-MM-DD" date token of a hamster-format "YYYY-MM-DD HH:MM" timestamp.
+fn date_part(ts: &str) -> &str {
+    ts.split_whitespace().next().unwrap_or(ts)
 }
 
 /// Hamster-format local "now" ("YYYY-MM-DD HH:MM").
@@ -114,7 +137,8 @@ mod tests {
         ];
         let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
         assert_eq!(plan.fact.activity, "newer-task");
-        assert_eq!(plan.fact.description, "work notes");
+        // same-day clone → the carried description is stamped continued
+        assert_eq!(plan.fact.description, ".. work notes");
         assert_eq!(plan.fact.tags, vec!["entity: work2", "location: home"]);
         assert_eq!(plan.fact.range.start, NOW);
         assert!(plan.fact.range.end.is_none());
@@ -173,6 +197,68 @@ mod tests {
         let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
         assert_eq!(plan.fact.activity, "devel");
         assert!(plan.notification.is_none());
+    }
+
+    fn fact_started(activity: &str, tags: &[&str], start: Option<&str>) -> Fact {
+        serde_json::from_value(serde_json::json!({
+            "activity": activity, "category": "work2.example",
+            "description": "write report\n- draft intro", "tags": tags, "id": 1,
+            "range": {"start": start, "end": "2026-06-06 10:00"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn same_day_clone_marks_carried_block_first_lines() {
+        let facts = vec![fact_started(
+            "task",
+            &["entity: work2"],
+            Some("2026-06-06 09:00"),
+        )];
+        let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
+        // first line marked, bullet untouched
+        assert_eq!(plan.fact.description, ".. write report\n- draft intro");
+    }
+
+    #[test]
+    fn cross_day_clone_leaves_description_verbatim() {
+        // a fact started on a previous day is a fresh block today, not a
+        // continuation — never stamped.
+        let facts = vec![fact_started(
+            "task",
+            &["entity: work2"],
+            Some("2026-06-05 09:00"),
+        )];
+        let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
+        assert_eq!(plan.fact.description, "write report\n- draft intro");
+    }
+
+    #[test]
+    fn null_start_is_not_treated_as_same_day() {
+        let facts = vec![fact_started("task", &["entity: work2"], None)];
+        let plan = plan_resume(&facts, &rule(), &Defaults::default(), NOW);
+        assert_eq!(plan.fact.description, "write report\n- draft intro");
+    }
+
+    #[test]
+    fn disabled_flag_leaves_description_verbatim_even_same_day() {
+        let d = Defaults {
+            mark_continuations: false,
+            ..Defaults::default()
+        };
+        let facts = vec![fact_started(
+            "task",
+            &["entity: work2"],
+            Some("2026-06-06 09:00"),
+        )];
+        let plan = plan_resume(&facts, &rule(), &d, NOW);
+        assert_eq!(plan.fact.description, "write report\n- draft intro");
+    }
+
+    #[test]
+    fn placeholder_description_is_never_marked() {
+        let plan = plan_resume(&[], &rule(), &Defaults::default(), NOW);
+        assert_eq!(plan.fact.description, "auto — rename me");
     }
 
     #[test]
