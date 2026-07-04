@@ -23,6 +23,8 @@ category = "work1.example"       # hamster category for placeholder facts
 
 [activities.work2]
 category = "work2.example"
+# placeholder_activity / placeholder_description may also be set per rule
+# (activities.* and workspaces.* alike) to override the defaults above
 
 [activities."/acme/"]           # regex key (slash-delimited) — matches any
 entity = "acme_other"           # activity name containing "acme" that no
