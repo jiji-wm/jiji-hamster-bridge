@@ -56,5 +56,5 @@ Do not re-derive these from the D-Bus introspection — the API has edge cases:
 ## Conventions
 
 - No design-doc/phase references in code or commit messages (hooks enforce this).
-- Commit trailers per workspace CLAUDE.md: `Review-Needed: committed by Claude Code` + `AI-Assisted: <mode> (<model-id>)`.
+- Commit trailers per the [jiji-workspace](https://github.com/jiji-wm/jiji-workspace) CLAUDE.md: `Review-Needed: committed by Claude Code` + `AI-Assisted: <mode> (<model-id>)`.
 - Commits in this repo are self-contained.
