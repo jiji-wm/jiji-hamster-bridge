@@ -509,8 +509,8 @@ mod tests {
 
     #[test]
     fn first_regex_in_sorted_order_wins() {
-        // both "/^y/" and "/acme/" match "acme-x"; sorted-key order: "/^y/" < "/acme/"
-        let s = "[activities.\"/^y/\"]\nentity = \"first\"\ncategory = \"c\"\n\
+        // both "/^a/" and "/acme/" match "acme-x"; sorted-key order: "/^a/" < "/acme/"
+        let s = "[activities.\"/^a/\"]\nentity = \"first\"\ncategory = \"c\"\n\
                  [activities.\"/acme/\"]\nentity = \"second\"\ncategory = \"c\"\n";
         let c = Config::parse(s).unwrap();
         let r = c.effective(&ctx(Some("acme-x"), None)).unwrap();
