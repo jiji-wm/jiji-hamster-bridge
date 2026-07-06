@@ -333,8 +333,7 @@ mod tests {
 
     #[test]
     fn valid_regex_activity_config_parses() {
-        let s =
-            "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
         assert!(Config::parse(s).is_ok());
     }
 
@@ -489,8 +488,7 @@ mod tests {
 
     #[test]
     fn regex_activity_matches_non_exact_name() {
-        let s =
-            "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
         let c = Config::parse(s).unwrap();
         let r = c.effective(&ctx(Some("acme-invoices"), None)).unwrap();
         assert_eq!(r.entity, "acme_other");
@@ -522,10 +520,7 @@ mod tests {
         let s = "[activities.acme]\ncategory = \"acme-corp.com\"\n\
                  [workspaces.\"/^scratch-/\"]\ntrack = false\n";
         let c = Config::parse(s).unwrap();
-        assert!(
-            c.effective(&ctx(Some("acme"), Some("scratch-1")))
-                .is_none()
-        );
+        assert!(c.effective(&ctx(Some("acme"), Some("scratch-1"))).is_none());
     }
 
     #[test]
@@ -541,8 +536,7 @@ mod tests {
 
     #[test]
     fn rule_for_entity_resolves_regex_rule_entity() {
-        let s =
-            "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
+        let s = "[activities.\"/acme/\"]\nentity = \"acme_other\"\ncategory = \"acme-corp.com\"\n";
         let c = Config::parse(s).unwrap();
         let r = c.rule_for_entity("acme_other").unwrap();
         assert_eq!(r.category, "acme-corp.com");
